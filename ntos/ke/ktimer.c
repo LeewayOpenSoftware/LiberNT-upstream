@@ -602,7 +602,7 @@ KiTimerListExpire(
         if (DpcCount < MAX_TIMER_DPCS &&
             Dpc->Type == DpcObject &&
             (Dpc->Number == 0 ||
-             Dpc->Number == KI_DPC_TARGET_PROCESSOR_OFFSET + KeGetCurrentProcessorNumber()))
+             Dpc->Number == KI_DPC_TARGET_PROCESSOR_OFFSET + KeGetCurrentPrcb()->Number))
         {
             DpcEntries[DpcCount].Dpc = Dpc;
             DpcEntries[DpcCount].Routine = Dpc->DeferredRoutine;
@@ -625,7 +625,7 @@ KiTimerListExpire(
     for (Index = 0; Index < DpcCount; Index++)
     {
         DpcEntries[Index].Dpc->ProcessorHistory |=
-            AFFINITY_MASK(KeGetCurrentProcessorNumber());
+            AFFINITY_MASK(KiLegacyProcessorNumber(KeGetCurrentPrcb()->Number));
 
         DpcEntries[Index].Routine(DpcEntries[Index].Dpc,
                                   DpcEntries[Index].Context,

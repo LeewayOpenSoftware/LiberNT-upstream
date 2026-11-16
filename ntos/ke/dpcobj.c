@@ -56,11 +56,11 @@ FAST_MUTEX KiGenericCallDpcMutex;
 
 /* The thread that runs threaded DPCs for each processor. Windows 11 has no
    KPRCB member for it on this layout, so it is kept beside the kernel. */
-static PKTHREAD KiDpcThread[MAXIMUM_PROCESSORS];
+static PKTHREAD KiDpcThread[KE_MAXIMUM_PROCESSORS];
 
 /* What wakes that thread: an ordinary DPC, because a processor only looks at
    its ordinary queue when it is interrupted for one. */
-static KDPC KiDpcThreadWakeDpc[MAXIMUM_PROCESSORS];
+static KDPC KiDpcThreadWakeDpc[KE_MAXIMUM_PROCESSORS];
 
 /* PRIVATE FUNCTIONS **********************************************************/
 
@@ -441,7 +441,7 @@ KeInsertQueueDpc(
     {
         Dpc->SystemArgument1 = SystemArgument1;
         Dpc->SystemArgument2 = SystemArgument2;
-        Dpc->ProcessorHistory |= AFFINITY_MASK(Processor);
+        Dpc->ProcessorHistory |= AFFINITY_MASK(KiLegacyProcessorNumber(Processor));
         Dpc->DpcData = DpcData;
         DpcData->DpcQueueDepth++;
         DpcData->DpcCount++;
@@ -506,7 +506,7 @@ KeInsertQueueDpc(
         {
             if (SmpDbgEnabled)
                 SmpDbgRemoteDpc(Processor, CurrentPrcb->Number);
-            KiIpiSend(AFFINITY_MASK(Processor), IPI_DPC);
+            KiIpiSendProcessor(Processor, IPI_DPC);
         }
     }
 
@@ -605,18 +605,17 @@ VOID
 NTAPI
 KeFlushQueuedDpcs(VOID)
 {
-    KAFFINITY Active = KeActiveProcessors;
     ULONG Processor, Pass;
+    BOOLEAN Found;
     KEVENT Done;
     KDPC Dpc;
 
     ASSERT_IRQL_LESS_OR_EQUAL(APC_LEVEL);
 
-    for (Processor = 0; Processor < MAXIMUM_PROCESSORS; Processor++)
+    for (Found = KiFindProcessorInSet(KeActiveProcessors.Bitmap, 0, &Processor);
+         Found;
+         Found = KiFindProcessorInSet(KeActiveProcessors.Bitmap, Processor + 1, &Processor))
     {
-        if ((Active & AFFINITY_MASK(Processor)) == 0)
-            continue;
-
         for (Pass = 0; Pass < 2; Pass++)
         {
             KeInitializeEvent(&Done, NotificationEvent, FALSE);
@@ -626,7 +625,7 @@ KeFlushQueuedDpcs(VOID)
             else
                 KeInitializeThreadedDpc(&Dpc, KiFlushDpcBarrierRoutine, &Done);
 
-            KeSetTargetProcessorDpc(&Dpc, (CCHAR)Processor);
+            KiSetTargetProcessorDpc(&Dpc, Processor);
             KeSetImportanceDpc(&Dpc, MediumHighImportance);
             KeInsertQueueDpc(&Dpc, NULL, NULL);
 
@@ -798,9 +797,10 @@ KeGenericCallDpc(
     _In_opt_ PVOID Context)
 {
     DEFERRED_REVERSE_BARRIER ReverseBarrier;
-    KAFFINITY Targets;
+    KI_PROCESSOR_SET Targets;
     volatile LONG Count;
     ULONG Processor, Total;
+    BOOLEAN Found;
     PKPRCB Prcb, CurrentPrcb;
     PKDPC Dpc;
     KIRQL OldIrql;
@@ -811,25 +811,18 @@ KeGenericCallDpc(
 
     OldIrql = KeRaiseIrqlToDpcLevel();
     CurrentPrcb = KeGetCurrentPrcb();
-    Targets = KeActiveProcessors;
+    KiCopyProcessorSet(Targets, KeActiveProcessors.Bitmap);
     KeLowerIrql(OldIrql);
 
-    Total = 0;
-    for (Processor = 0; Processor < MAXIMUM_PROCESSORS; Processor++)
-    {
-        if (Targets & AFFINITY_MASK(Processor))
-            Total++;
-    }
-
+    Total = KiCountProcessorSet(Targets);
     Count = (LONG)Total;
     ReverseBarrier.Barrier = Total;
     ReverseBarrier.TotalProcessors = Total;
 
-    for (Processor = 0; Processor < MAXIMUM_PROCESSORS; Processor++)
+    for (Found = KiFindProcessorInSet(Targets, 0, &Processor);
+         Found;
+         Found = KiFindProcessorInSet(Targets, Processor + 1, &Processor))
     {
-        if ((Targets & AFFINITY_MASK(Processor)) == 0)
-            continue;
-
         if (Processor == CurrentPrcb->Number)
             continue;
 
@@ -837,17 +830,17 @@ KeGenericCallDpc(
         Dpc = &Prcb->CallDpc;
 
         KeInitializeDpc(Dpc, Routine, Context);
-        KeSetTargetProcessorDpc(Dpc, (CCHAR)Processor);
+        KiSetTargetProcessorDpc(Dpc, Processor);
         KeSetImportanceDpc(Dpc, HighImportance);
         KeInsertQueueDpc(Dpc, (PVOID)&Count, &ReverseBarrier);
     }
 
     /* This processor runs its share itself rather than interrupting itself */
-    if (Targets & AFFINITY_MASK(CurrentPrcb->Number))
+    if (KiIsProcessorInSet(Targets, CurrentPrcb->Number))
     {
         Dpc = &CurrentPrcb->CallDpc;
         KeInitializeDpc(Dpc, Routine, Context);
-        KeSetTargetProcessorDpc(Dpc, (CCHAR)CurrentPrcb->Number);
+        KiSetTargetProcessorDpc(Dpc, CurrentPrcb->Number);
 
         OldIrql = KeRaiseIrqlToDpcLevel();
         Routine(Dpc, Context, (PVOID)&Count, &ReverseBarrier);
@@ -917,13 +910,13 @@ KiStartDpcThreads(VOID)
     PETHREAD Thread;
     NTSTATUS Status;
     ULONG Processor;
+    BOOLEAN Found;
     KPRIORITY Priority = HIGH_PRIORITY;
 
-    for (Processor = 0; Processor < MAXIMUM_PROCESSORS; Processor++)
+    for (Found = KiFindProcessorInSet(KeActiveProcessors.Bitmap, 0, &Processor);
+         Found;
+         Found = KiFindProcessorInSet(KeActiveProcessors.Bitmap, Processor + 1, &Processor))
     {
-        if ((KeActiveProcessors & AFFINITY_MASK(Processor)) == 0)
-            continue;
-
         Prcb = KiProcessorBlock[Processor];
         if (Prcb == NULL)
             continue;
@@ -957,13 +950,12 @@ KiStartDpcThreads(VOID)
             continue;
 
         KeSetPriorityThread(&Thread->Tcb, Priority);
-        KeSetAffinityThread(&Thread->Tcb, AFFINITY_MASK(Processor));
+        KiSetProcessorAffinityThread(&Thread->Tcb, Processor);
 
         KeInitializeDpc(&KiDpcThreadWakeDpc[Processor],
                         KiDpcThreadWakeRoutine,
                         Prcb);
-        KeSetTargetProcessorDpc(&KiDpcThreadWakeDpc[Processor],
-                                (CCHAR)Processor);
+        KiSetTargetProcessorDpc(&KiDpcThreadWakeDpc[Processor], Processor);
         KeSetImportanceDpc(&KiDpcThreadWakeDpc[Processor], HighImportance);
 
         KiDpcThread[Processor] = &Thread->Tcb;

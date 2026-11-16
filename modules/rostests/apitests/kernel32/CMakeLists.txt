@@ -51,6 +51,7 @@ list(APPEND SOURCE
     DeleteFileOpenHandle.c
     DeviceIoControl.c
     EmulatedProcess.c
+    ProcessorGroups.c
     dosdev.c
     DateTimeFormatFlags.c
     EnumDateTimeFormats.c
