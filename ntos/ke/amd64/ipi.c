@@ -136,12 +136,10 @@ KiIpiParticipateInGenericCall(
     UNREFERENCED_PARAMETER(Remaining);
     ASSERT(Remaining >= 0);
 
-    while (!KiGenericCallPacket.Release)
+    while (ReadAcquire(&KiGenericCallPacket.Release) == 0)
     {
         YieldProcessor();
     }
-
-    ASSERT(KiGenericCallPacket.Release != 0);
 
     OldIrql = KfRaiseIrql(IPI_LEVEL);
     Function(Argument);
@@ -238,11 +236,10 @@ KeIpiGenericCall(
     {
         KiGenericCallPacket.Function = Function;
         KiGenericCallPacket.Argument = Argument;
-        KiGenericCallPacket.Release = 0;
+        WriteRelease(&KiGenericCallPacket.Release, 0);
         for (Word = 0; Word < KiProcessorSetWords; Word++)
             KiGenericCallPacket.OutstandingDone[Word] = Targets[Word];
-        KiGenericCallPacket.TargetsRemaining = (LONG)KiCountProcessorSet(Targets);
-        KeMemoryBarrier();
+        InterlockedExchange(&KiGenericCallPacket.TargetsRemaining, (LONG)KiCountProcessorSet(Targets));
 
         for (Found = KiFindProcessorInSet(Targets, 0, &Processor);
              Found;
@@ -259,7 +256,7 @@ KeIpiGenericCall(
                 HalpRequestIpi(Word, Targets[Word]);
         }
 
-        while (KiGenericCallPacket.TargetsRemaining != 0)
+        while (ReadAcquire(&KiGenericCallPacket.TargetsRemaining) != 0)
         {
             if (!InterruptsEnabled)
                 KiIpiProcessRequests();
@@ -272,7 +269,7 @@ KeIpiGenericCall(
     KeRaiseIrql(IPI_LEVEL, &ExecuteIrql);
 
     if (AnyTargets)
-        KiGenericCallPacket.Release = 1;
+        WriteRelease(&KiGenericCallPacket.Release, 1);
 
     Status = Function(Argument);
 

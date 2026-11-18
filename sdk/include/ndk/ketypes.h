@@ -2585,7 +2585,7 @@ typedef struct _KTHREAD
 {
     DISPATCHER_HEADER Header;
 #if (NTDDI_VERSION >= NTDDI_LONGHORN) // [
-    ULONGLONG CycleTime;
+    volatile ULONGLONG CycleTime;
 #ifndef _WIN64 // [
     ULONG HighCycleTime;
 #endif // ]
@@ -3219,7 +3219,7 @@ typedef struct _KTHREAD
         struct
         {
             UCHAR WaitBlockFill5[1 * sizeof(KWAIT_BLOCK) + FIELD_OFFSET(KWAIT_BLOCK, SpareLong)]; // 32bit: -, 64bit: 68/0x44
-            UCHAR State;
+            volatile UCHAR State;
 #if (NTDDI_VERSION >= NTDDI_WIN10)
             CHAR Spare13;
 #else
@@ -3290,7 +3290,7 @@ typedef struct _KTHREAD
 #if (NTDDI_VERSION >= 0x060223F0) // since 6.2.9200.16384
     union
     {
-        ULONG NextProcessor;
+        volatile ULONG NextProcessor;
         struct
         {
             ULONG NextProcessorNumber : 31;
@@ -3299,8 +3299,8 @@ typedef struct _KTHREAD
     };
     LONG QueuePriority;
 #else
-    ULONG NextProcessor;
-    ULONG DeferredProcessor;
+    volatile ULONG NextProcessor;
+    volatile ULONG DeferredProcessor;
 #endif
     PKPROCESS Process;
 
@@ -3433,7 +3433,7 @@ typedef struct _KTHREAD
     ULONG PriorityFloorSummary;
     volatile LONG AbCompletedIoBoostCount;
   #if (NTDDI_VERSION >= NTDDI_WIN10_RS1)
-    LONG AbCompletedIoQoSBoostCount;
+    volatile LONG AbCompletedIoQoSBoostCount;
   #endif
 
   #if (NTDDI_VERSION >= NTDDI_WIN10) // since 10.0.10240.16384
@@ -3899,7 +3899,7 @@ typedef struct _KPROCESS
             LONG CheckStackExtents:1;
             LONG ReservedFlags:26;
         };
-        LONG ProcessFlags;
+        volatile LONG ProcessFlags;
     };
     SCHAR BasePriority;
     SCHAR QuantumReset;
@@ -3913,7 +3913,7 @@ typedef struct _KPROCESS
         KEXECUTE_OPTIONS Flags;
         UCHAR ExecuteOptions;
     };
-    ULONG StackCount;
+    volatile ULONG StackCount;
     LIST_ENTRY ProcessListEntry;
 #if (NTDDI_VERSION >= NTDDI_LONGHORN) // [
     ULONGLONG CycleTime;
