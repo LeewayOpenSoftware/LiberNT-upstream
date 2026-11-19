@@ -989,9 +989,13 @@ RawInputThreadMain(VOID)
     StartTheTimers();
     UserLeave();
 
-    HidInputStart();
-    TouchInputStart();
-    InputDevicesStart();
+    ASSERT(ReadPointerAcquire((PVOID volatile *)&gpDisplaySession) != NULL);
+    if (gbConsoleSession)
+    {
+        HidInputStart();
+        TouchInputStart();
+        InputDevicesStart();
+    }
 
     PoRequestShutdownEvent(&ShutdownEvent);
     for (;;)
