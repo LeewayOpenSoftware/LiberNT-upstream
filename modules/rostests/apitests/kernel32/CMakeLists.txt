@@ -56,6 +56,7 @@ list(APPEND SOURCE
     DiskSignatureCollision.c
     EmulatedProcess.c
     DispatcherStress.c
+    ProcessorAffinity.c
     ProcessorGroups.c
     dosdev.c
     DateTimeFormatFlags.c
