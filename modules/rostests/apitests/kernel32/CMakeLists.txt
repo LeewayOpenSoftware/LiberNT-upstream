@@ -59,6 +59,7 @@ list(APPEND SOURCE
     ProcessorGroups.c
     dosdev.c
     DateTimeFormatFlags.c
+    ExportStubs.c
     EnumDateTimeFormats.c
     EnumSystemCodePages.c
     FindActCtxSectionStringW.c

@@ -24,6 +24,7 @@ extern void func_CallbackMayRunLong(void);
 extern void func_CdfsVolume(void);
 extern void func_SataDiskAddress(void);
 extern void func_Mailslot(void);
+extern void func_ExportStubs(void);
 extern void func_Arm64ThreadContext(void);
 extern void func_ConsoleAlias(void);
 extern void func_ConsoleCharInput(void);
@@ -255,6 +256,7 @@ const struct test winetest_testlist[] =
     { "Arm64ThreadContext",          func_Arm64ThreadContext },
     { "ConsoleAlias", func_ConsoleAlias },
     { "ConsoleCharInput",            func_ConsoleCharInput },
+    { "ExportStubs", func_ExportStubs },
     { "ConsoleCommandHistory",     func_ConsoleCommandHistory },
     { "ConsoleCP",                   func_ConsoleCP },
     { "ConsoleFontInfo",           func_ConsoleFontInfo },
