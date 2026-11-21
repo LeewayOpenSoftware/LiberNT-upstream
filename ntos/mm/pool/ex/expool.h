@@ -71,6 +71,16 @@ ExpPoolTypeFromHeap(_In_ ULONG HeapIndex)
 }
 
 PVOID ExpPoolAllocate(_In_ ULONG HeapIndex, _In_ SIZE_T NumberOfBytes, _In_ ULONG Tag, _In_ ULONG HeapFlags);
+NTSTATUS ExpPoolCreateHeap(_Out_ PPOOL_HEAP *Heap, _In_ PPOOL_VA_REGION Region, _In_ ULONG HeapId);
+PVOID ExpSessionPoolAllocate(_In_ ULONG HeapIndex, _In_ SIZE_T NumberOfBytes, _In_ ULONG Tag, _In_ ULONG HeapFlags);
+BOOLEAN ExpSessionPoolFree(_In_ PVOID Block);
+BOOLEAN ExpSessionPoolQuery(_In_ PVOID Block, _Out_ PPOOL_BLOCK_INFO Info);
+NTSTATUS ExpSessionPoolCreate(_In_ PVOID Space, _In_ ULONG SessionId, _In_ ULONG64 PagedBase, _In_ SIZE_T PagedBytes,
+                              _In_ ULONG64 NonPagedBase, _In_ SIZE_T NonPagedBytes, _Out_ PVOID *SessionPool);
+VOID ExpSessionPoolDestroy(_In_ PVOID SessionPool);
+VOID ExpSessionPoolQueryUsage(_In_ PVOID SessionPool, _Out_ PSIZE_T PagedBytes, _Out_ PSIZE_T NonPagedBytes,
+                              _Out_ PULONG Allocations);
+PVOID MiSessionPoolOfCurrentProcess(VOID);
 typedef enum _EX_POOL_GROWTH
 {
     ExpPoolGrowthFailed,

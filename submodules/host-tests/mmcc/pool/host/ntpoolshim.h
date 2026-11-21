@@ -35,6 +35,10 @@ typedef struct _EPROCESS { SIZE_T Quota[2]; LONG References; } EPROCESS, *PEPROC
 #define POOL_FLAG_USE_QUOTA 1ULL
 #define POOL_FLAG_UNINITIALIZED 2ULL
 #define POOL_FLAG_SESSION 4ULL
+#define SESSION_POOL_MASK 32
+#define NonPagedPoolSession 32
+#define PagedPoolSession 33
+#define NonPagedPoolSessionNx 0x220
 #define POOL_FLAG_CACHE_ALIGNED 8ULL
 #define POOL_FLAG_RAISE_ON_FAILURE 0x20ULL
 #define POOL_FLAG_NON_PAGED 0x40ULL
@@ -74,6 +78,9 @@ VOID ObReferenceObject(PEPROCESS Process);
 VOID ObDereferenceObject(PEPROCESS Process);
 NTSTATUS MiSystemCommitPinned(int *System, ULONG64 Base, ULONG Pages, ULONG Protection);
 VOID MiSystemDecommitPinned(int *System, ULONG64 Base, ULONG Pages);
+NTSTATUS MiSpaceCommitPinned(int *System, PVOID Space, ULONG64 Base, ULONG Pages, ULONG Protection);
+VOID MiSpaceDecommitPinned(int *System, PVOID Space, ULONG64 Base, ULONG Pages);
+BOOLEAN MmIsSessionAddress(PVOID Address);
 VOID MiWakeBalanceSetManager(VOID);
 NTSTATUS MiWaitForMemory(NTSTATUS Status, PULONG Attempts);
 VOID InitializePool(POOL_TYPE Type, ULONG Threshold);

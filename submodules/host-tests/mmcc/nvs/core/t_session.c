@@ -15,6 +15,36 @@ extern SIZE_T MmSessionSize;
 
 PMI_SYSTEM MiSessionTestSystem;
 SESSION_TEST_UNLOAD MiSessionTestUnload;
+static volatile LONG SessionPoolsCreated, SessionPoolsDestroyed;
+static ULONG64 SessionPoolLastBase[2];
+static SIZE_T SessionPoolLastBytes[2];
+
+NTSTATUS ExpSessionPoolCreate(PVOID Space, ULONG SessionId, ULONG64 PagedBase, SIZE_T PagedBytes,
+                              ULONG64 NonPagedBase, SIZE_T NonPagedBytes, PVOID *SessionPool)
+{
+    PMI_ADDRESS_SPACE SessionSpace = Space;
+
+    (void)SessionId;
+    CHECK(SessionSpace->IsSession);
+    CHECK(PagedBase >= SessionSpace->LowestVa && NonPagedBase + NonPagedBytes - 1 <= SessionSpace->HighestVa);
+    CHECK(PagedBase + PagedBytes <= NonPagedBase && PagedBytes != 0 && NonPagedBytes != 0);
+    SessionPoolLastBase[0] = PagedBase;
+    SessionPoolLastBase[1] = NonPagedBase;
+    SessionPoolLastBytes[0] = PagedBytes;
+    SessionPoolLastBytes[1] = NonPagedBytes;
+    *SessionPool = malloc(16);
+    if (*SessionPool == NULL)
+        return STATUS_NO_MEMORY;
+    InterlockedIncrement(&SessionPoolsCreated);
+    return STATUS_SUCCESS;
+}
+
+VOID ExpSessionPoolDestroy(PVOID SessionPool)
+{
+    CHECK(SessionPool != NULL);
+    free(SessionPool);
+    InterlockedIncrement(&SessionPoolsDestroyed);
+}
 _Thread_local PEPROCESS MiSessionTestCurrent;
 volatile LONG MiSessionTestAllocations;
 volatile LONG MiSessionTestFailAllocate;
@@ -375,6 +405,50 @@ SessionMoveLastProcess(void)
 }
 
 static void
+SessionPoolRegions(void)
+{
+    PMI_SYSTEM System = MiSessionTestSystem;
+    ULONG64 Size = System->SessionEnd - System->SessionStart + 1;
+    struct _EPROCESS_HOST Leader, Member;
+    MI_PROCESS Native[2];
+    PMI_ADDRESS_SPACE Space;
+    LONG Created = SessionPoolsCreated, Destroyed = SessionPoolsDestroyed;
+    ULONG64 Available;
+    ULONG Id;
+
+    SessionProcessInitialize(&Leader, &Native[0]);
+    SessionProcessInitialize(&Member, &Native[1]);
+    Available = MiPfnAvailablePages(&System->Pfn);
+    MiSessionTestCurrent = &Leader;
+    CHECK(MmSessionCreate(&Id) == STATUS_SUCCESS);
+    CHECK(SessionPoolsCreated == Created + 1 && SessionPoolsDestroyed == Destroyed);
+    CHECK(SessionPoolLastBase[0] == System->SessionStart + Size / 4);
+    CHECK(SessionPoolLastBytes[0] == (Size / 4 < (128ULL << 20) ? Size / 4 : (128ULL << 20)));
+    CHECK(SessionPoolLastBytes[1] == (Size / 8 < (64ULL << 20) ? Size / 8 : (64ULL << 20)));
+    CHECK(SessionPoolLastBase[1] == SessionPoolLastBase[0] + SessionPoolLastBytes[0]);
+    MiSessionAddProcess(&Member);
+    Space = MiSessionSpaceOfProcess(&Member);
+    CHECK(Space != NULL && Space->IsSession);
+    if (Space != NULL)
+    {
+        CHECK(MiSpaceCommitPinned(System, Space, SessionPoolLastBase[0], 3, MI_PROT_READWRITE) == STATUS_SUCCESS);
+        CHECK(MiSpaceCommitPinned(System, Space, SessionPoolLastBase[1] + PAGE_SIZE, 2, MI_PROT_READWRITE) ==
+              STATUS_SUCCESS);
+        CHECK(MiSpaceCommitPinned(System, Space, SessionPoolLastBase[0], 1, MI_PROT_READWRITE) ==
+              STATUS_CONFLICTING_ADDRESSES);
+    }
+    CHECK(MmSessionDelete(Id) == STATUS_SUCCESS);
+    CHECK(SessionPoolsDestroyed == Destroyed);
+    MiSessionTestCurrent = &Member;
+    MiSessionRemoveProcess(&Member);
+    CHECK(SessionPoolsDestroyed == Destroyed + 1);
+    CHECK(MiPfnAvailablePages(&System->Pfn) == Available);
+    MiSessionRemoveProcess(&Leader);
+    CHECK(MiSessionTestAllocations == 0);
+    MiSessionTestCurrent = NULL;
+}
+
+static void
 SessionMultipleMembers(void)
 {
     struct _EPROCESS_HOST Leader, Members[12];
@@ -537,6 +611,7 @@ TestSession(void)
     SessionAttachRundown();
     SessionMoveProcess();
     SessionDriverUnload();
+    SessionPoolRegions();
     SessionMoveLastProcess();
     SessionNext();
     SessionSpaceRelease(&World.System);

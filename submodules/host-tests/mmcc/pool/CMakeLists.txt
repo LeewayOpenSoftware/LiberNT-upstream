@@ -63,7 +63,7 @@ foreach(TARGET pool_nt pool_nt_asan)
     add_executable(${TARGET} host/t_ntpool.c ${POOL_ENGINE}
         ${POOL_ROOT}/ex/exinit.c ${POOL_ROOT}/ex/exalloc.c
         ${POOL_ROOT}/ex/exfree.c ${POOL_ROOT}/ex/exquota.c
-        ${POOL_ROOT}/backing/mmbacking.c)
+        ${POOL_ROOT}/ex/exsession.c ${POOL_ROOT}/backing/mmbacking.c)
     target_compile_definitions(${TARGET} PRIVATE POOL_HOST_TEST)
     target_compile_options(${TARGET} PRIVATE -Wall -Wextra -Wno-unused-parameter -Wno-multichar -g -O1)
     add_test(NAME ${TARGET} COMMAND ${TARGET})
@@ -76,7 +76,7 @@ foreach(TARGET pool_nt_envelope pool_nt_envelope_asan pool_nt_envelope_tsan)
     add_executable(${TARGET} host/t_ntpool_envelope.c ${POOL_ENGINE}
         ${POOL_ROOT}/ex/exinit.c ${POOL_ROOT}/ex/exalloc.c
         ${POOL_ROOT}/ex/exfree.c ${POOL_ROOT}/ex/exquota.c
-        ${POOL_ROOT}/backing/mmbacking.c)
+        ${POOL_ROOT}/ex/exsession.c ${POOL_ROOT}/backing/mmbacking.c)
     target_compile_definitions(${TARGET} PRIVATE POOL_HOST_TEST)
     target_compile_options(${TARGET} PRIVATE -Wall -Wextra -Wno-unused-parameter -Wno-multichar -g -O1)
     target_link_libraries(${TARGET} PRIVATE Threads::Threads)

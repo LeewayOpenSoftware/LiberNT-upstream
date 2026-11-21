@@ -89,6 +89,17 @@ VOID MiSystemDecommitPages(_Inout_ PMI_SYSTEM System, _In_ ULONG64 VirtualAddres
 NTSTATUS MiSystemCommitPinned(_Inout_ PMI_SYSTEM System, _In_ ULONG64 VirtualAddress, _In_ ULONG Count,
                               _In_ ULONG Protection);
 VOID MiSystemDecommitPinned(_Inout_ PMI_SYSTEM System, _In_ ULONG64 VirtualAddress, _In_ ULONG Count);
+NTSTATUS MiSpaceRegionCreate(_Inout_ PMI_SYSTEM System, _Inout_ PMI_ADDRESS_SPACE Space, _In_ ULONG64 PageCount,
+                             _In_ BOOLEAN PinTables, _In_ ULONG64 FixedBase, _Out_ PMI_VAD *Vad,
+                             _Out_ PULONG64 Base);
+VOID MiSpaceRegionDelete(_Inout_ PMI_SYSTEM System, _Inout_ PMI_ADDRESS_SPACE Space, _Inout_ PMI_VAD Vad,
+                         _In_ BOOLEAN PinnedTables);
+NTSTATUS MiSpaceCommitPinned(_Inout_ PMI_SYSTEM System, _Inout_ PMI_ADDRESS_SPACE Space, _In_ ULONG64 VirtualAddress,
+                             _In_ ULONG Count, _In_ ULONG Protection);
+VOID MiSpaceDecommitPinned(_Inout_ PMI_SYSTEM System, _Inout_ PMI_ADDRESS_SPACE Space, _In_ ULONG64 VirtualAddress,
+                           _In_ ULONG Count);
+ULONG MiSpaceReleasePinned(_Inout_ PMI_SYSTEM System, _Inout_ PMI_ADDRESS_SPACE Space, _In_ ULONG64 VirtualAddress,
+                           _In_ ULONG64 Count);
 NTSTATUS MiSystemProtect(_Inout_ PMI_SYSTEM System, _In_ ULONG64 VirtualAddress, _In_ ULONG Count,
                          _In_ ULONG Protection);
 

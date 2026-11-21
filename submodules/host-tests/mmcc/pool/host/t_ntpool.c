@@ -19,6 +19,10 @@ int MiSystem;
 static EPROCESS SystemProcess, TestProcess;
 PEPROCESS PsInitialSystemProcess = &SystemProcess;
 static PUCHAR Arena, Protection;
+#define SESSION_ARENA_BYTES (32 * 1024 * 1024)
+static PUCHAR SessionArena, SessionProtection;
+static PVOID CurrentSessionPool;
+static int SessionSpace;
 static ULONG Failures, Checks;
 extern POOL_KM_LAYOUT MiPoolLayout;
 
@@ -38,6 +42,106 @@ PEPROCESS PsGetCurrentProcess(VOID) { return &TestProcess; }
 VOID ObReferenceObject(PEPROCESS Process) { Process->References++; }
 VOID ObDereferenceObject(PEPROCESS Process) { Process->References--; }
 VOID MiWakeBalanceSetManager(VOID) { }
+PVOID MiSessionPoolOfCurrentProcess(VOID) { return CurrentSessionPool; }
+BOOLEAN MmIsSessionAddress(PVOID Address)
+{
+    return SessionArena != NULL && (PUCHAR)Address >= SessionArena && (PUCHAR)Address < SessionArena + SESSION_ARENA_BYTES;
+}
+
+NTSTATUS MiSpaceCommitPinned(int *System, PVOID Space, ULONG64 Base, ULONG Pages, ULONG Protect)
+{
+    SIZE_T Offset = (SIZE_T)(Base - (ULONG64)(ULONG_PTR)SessionArena);
+    CHECK(Space == &SessionSpace);
+    CHECK(Offset < SESSION_ARENA_BYTES && Pages <= (SESSION_ARENA_BYTES - Offset) / PAGE_SIZE);
+    if (Offset >= SESSION_ARENA_BYTES || Pages > (SESSION_ARENA_BYTES - Offset) / PAGE_SIZE)
+        return STATUS_INVALID_PARAMETER;
+    for (ULONG i = 0; i < Pages; i++)
+    {
+        CHECK(SessionProtection[(Offset >> PAGE_SHIFT) + i] == 0);
+        SessionProtection[(Offset >> PAGE_SHIFT) + i] = (UCHAR)Protect;
+    }
+    return STATUS_SUCCESS;
+}
+
+VOID MiSpaceDecommitPinned(int *System, PVOID Space, ULONG64 Base, ULONG Pages)
+{
+    SIZE_T First = ((ULONG_PTR)Base - (ULONG_PTR)SessionArena) >> PAGE_SHIFT;
+    CHECK(Space == &SessionSpace);
+    for (ULONG i = 0; i < Pages; i++)
+    {
+        CHECK(SessionProtection[First + i] != 0);
+        SessionProtection[First + i] = 0;
+    }
+}
+
+static VOID SessionPoolTests(VOID)
+{
+    const SIZE_T Sizes[] = { 24, 300, PAGE_SIZE, PAGE_SIZE * 9, POOL_UNIT_SIZE + 64 };
+    SIZE_T PagedBytes, NonPagedBytes;
+    ULONG Allocations, i;
+    POOL_BLOCK_INFO Info;
+    PVOID Pool = NULL, Kept[3];
+
+    CHECK(posix_memalign((void **)&SessionArena, POOL_UNIT_SIZE, SESSION_ARENA_BYTES) == 0);
+    SessionProtection = calloc(SESSION_ARENA_BYTES / PAGE_SIZE, 1);
+    CHECK(SessionArena != NULL && SessionProtection != NULL);
+    if (SessionArena == NULL || SessionProtection == NULL)
+        return;
+
+    Kept[0] = ExAllocatePoolWithTag(PagedPoolSession, 64, TAG_TEST);
+    CHECK(Kept[0] != NULL && !MmIsSessionAddress(Kept[0]));
+    ExFreePoolWithTag(Kept[0], TAG_TEST);
+
+    CHECK(ExpSessionPoolCreate(&SessionSpace, 7, (ULONG64)(ULONG_PTR)SessionArena, 16 * 1024 * 1024,
+                               (ULONG64)(ULONG_PTR)SessionArena + 16 * 1024 * 1024, 16 * 1024 * 1024,
+                               &Pool) == STATUS_SUCCESS);
+    CHECK(Pool != NULL);
+    if (Pool == NULL)
+        return;
+    CurrentSessionPool = Pool;
+    for (i = 0; i < RTL_NUMBER_OF(Sizes); i++)
+    {
+        PVOID Paged = ExAllocatePoolWithTag(PagedPoolSession, Sizes[i], TAG_TEST);
+        PVOID NonPaged = ExAllocatePoolWithTag(NonPagedPoolSessionNx, Sizes[i], TAG_TEST);
+        PVOID Zeroed = ExAllocatePool2(POOL_FLAG_SESSION | POOL_FLAG_PAGED, Sizes[i], TAG_TEST);
+        PVOID Global = ExAllocatePoolWithTag(PagedPool, Sizes[i], TAG_TEST);
+
+        CHECK(Paged != NULL && (PUCHAR)Paged >= SessionArena && (PUCHAR)Paged < SessionArena + 16 * 1024 * 1024);
+        CHECK(NonPaged != NULL && (PUCHAR)NonPaged >= SessionArena + 16 * 1024 * 1024 &&
+              (PUCHAR)NonPaged < SessionArena + SESSION_ARENA_BYTES);
+        CHECK(Zeroed != NULL && MmIsSessionAddress(Zeroed));
+        CHECK(Global != NULL && !MmIsSessionAddress(Global));
+        if (Paged == NULL || NonPaged == NULL || Zeroed == NULL || Global == NULL)
+            continue;
+        for (SIZE_T j = 0; j < Sizes[i]; j++)
+            CHECK(((PUCHAR)Zeroed)[j] == 0);
+        CHECK(ExpSessionPoolQuery(Paged, &Info) && Info.Size >= Sizes[i] && Info.Tag == TAG_TEST);
+        CHECK(!ExpSessionPoolQuery(Global, &Info));
+        memset(Paged, 0xCD, Sizes[i]);
+        memset(NonPaged, 0xCD, Sizes[i]);
+        ExpSessionPoolQueryUsage(Pool, &PagedBytes, &NonPagedBytes, &Allocations);
+        CHECK(Allocations == ((1u << 16) | 2u) && PagedBytes >= 2 * Sizes[i] && NonPagedBytes >= Sizes[i]);
+        ExFreePoolWithTag(Paged, TAG_TEST);
+        ExFreePoolWithTag(NonPaged, TAG_TEST);
+        ExFreePoolWithTag(Zeroed, TAG_TEST);
+        ExFreePoolWithTag(Global, TAG_TEST);
+        ExpSessionPoolQueryUsage(Pool, &PagedBytes, &NonPagedBytes, &Allocations);
+        CHECK(Allocations == 0 && PagedBytes == 0 && NonPagedBytes == 0);
+    }
+
+    Kept[0] = ExAllocatePoolWithTag(PagedPoolSession, 100, TAG_TEST);
+    Kept[1] = ExAllocatePoolWithTag(PagedPoolSession, PAGE_SIZE * 3, TAG_TEST);
+    Kept[2] = ExAllocatePoolWithTag(NonPagedPoolSession, 40, TAG_TEST);
+    CHECK(Kept[0] != NULL && Kept[1] != NULL && Kept[2] != NULL);
+    ExpSessionPoolQueryUsage(Pool, &PagedBytes, &NonPagedBytes, &Allocations);
+    CHECK(Allocations == ((1u << 16) | 2u) && PagedBytes >= 100 + PAGE_SIZE * 3 && NonPagedBytes >= 40);
+    CurrentSessionPool = NULL;
+    ExpSessionPoolDestroy(Pool);
+
+    free(SessionProtection);
+    free(SessionArena);
+    SessionArena = NULL;
+}
 NTSTATUS MiWaitForMemory(NTSTATUS Status, PULONG Attempts) { return Status; }
 
 NTSTATUS PsChargeProcessPoolQuota(PEPROCESS Process, ULONG Type, SIZE_T Size)
@@ -162,6 +266,7 @@ int main(void)
         ExFreePoolWithTag(Block, TAG_TEST);
         CHECK(TestProcess.References == 0 && TestProcess.Quota[0] == 0);
     }
+    SessionPoolTests();
     free(Protection);
     free(Arena);
     printf("NT pool: %u checks, %u failures\n", Checks, Failures);

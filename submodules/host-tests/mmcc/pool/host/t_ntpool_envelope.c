@@ -49,6 +49,13 @@ _Noreturn VOID ExRaiseStatus(NTSTATUS Status) { fprintf(stderr, "raise %x\n", St
 BOOLEAN MmUseSpecialPool(SIZE_T Size, ULONG Tag) { return FALSE; }
 PVOID MmAllocateSpecialPool(SIZE_T Size, ULONG Tag, POOL_TYPE Type, ULONG Mode) { return NULL; }
 BOOLEAN MmIsSpecialPoolAddress(PVOID Block) { return FALSE; }
+BOOLEAN MmIsSessionAddress(PVOID Address) { return FALSE; }
+PVOID MiSessionPoolOfCurrentProcess(VOID) { return NULL; }
+NTSTATUS MiSpaceCommitPinned(int *System, PVOID Space, ULONG64 Base, ULONG Pages, ULONG Protection)
+{
+    return STATUS_INVALID_PARAMETER;
+}
+VOID MiSpaceDecommitPinned(int *System, PVOID Space, ULONG64 Base, ULONG Pages) { }
 VOID MmFreeSpecialPool(PVOID Block) { abort(); }
 PEPROCESS PsGetCurrentProcess(VOID) { return &TestProcess; }
 VOID ObReferenceObject(PEPROCESS Process) { __atomic_add_fetch(&Process->References, 1, __ATOMIC_RELAXED); }

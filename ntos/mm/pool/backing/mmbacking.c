@@ -97,6 +97,56 @@ PoolBackResidentBacking(
     Backing->Context = NULL;
 }
 
+static
+NTSTATUS
+PoolBackSessionCommit(
+    _In_opt_ PVOID Context,
+    _In_ PVOID Base,
+    _In_ SIZE_T Bytes)
+{
+    PPOOL_SESSION_BACKING Session = Context;
+    NTSTATUS Status;
+    ULONG Attempts = 0;
+
+    POOL_ASSERT(Session != NULL && Session->Space != NULL);
+    for (;;)
+    {
+        Status = MiSpaceCommitPinned(&MiSystem, Session->Space, (ULONG64)(ULONG_PTR)Base,
+                                     (ULONG)(Bytes >> PAGE_SHIFT), Session->Protection);
+        if (Status != STATUS_NO_MEMORY || !NT_SUCCESS(MiWaitForMemory(Status, &Attempts)))
+            break;
+    }
+
+    if (Status == STATUS_NO_MEMORY || Status == STATUS_COMMITMENT_LIMIT)
+        MiWakeBalanceSetManager();
+
+    return Status;
+}
+
+static
+VOID
+PoolBackSessionDecommit(
+    _In_opt_ PVOID Context,
+    _In_ PVOID Base,
+    _In_ SIZE_T Bytes)
+{
+    PPOOL_SESSION_BACKING Session = Context;
+
+    POOL_ASSERT(Session != NULL && Session->Space != NULL);
+    MiSpaceDecommitPinned(&MiSystem, Session->Space, (ULONG64)(ULONG_PTR)Base, (ULONG)(Bytes >> PAGE_SHIFT));
+}
+
+VOID
+PoolBackSessionBacking(
+    _Out_ PPOOL_BACKING Backing,
+    _In_ PPOOL_SESSION_BACKING Context)
+{
+    Context->Protection = MI_PROT_READWRITE;
+    Backing->Commit = PoolBackSessionCommit;
+    Backing->Decommit = PoolBackSessionDecommit;
+    Backing->Context = Context;
+}
+
 VOID
 PoolBackQueryLayout(
     _Out_ PPOOL_KM_LAYOUT Layout)

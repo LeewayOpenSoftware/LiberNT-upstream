@@ -125,6 +125,16 @@ ExAllocatePoolWithTag(
     if (PoolType & POOL_ZERO_ALLOCATION)
         HeapFlags |= POOL_ALLOC_ZERO;
 
+    if (PoolType & SESSION_POOL_MASK)
+    {
+        Block = ExpSessionPoolAllocate(HeapIndex, NumberOfBytes, Tag, HeapFlags);
+        if (Block != NULL)
+            return Block;
+        if (PoolType & POOL_RAISE_IF_ALLOCATION_FAILURE)
+            ExRaiseStatus(STATUS_INSUFFICIENT_RESOURCES);
+        return NULL;
+    }
+
     if ((ExpPoolFlags & EX_POOL_FLAG_SPECIAL_POOL) && MmUseSpecialPool(NumberOfBytes, Tag))
     {
         Block = MmAllocateSpecialPool(NumberOfBytes, Tag, PoolType, 2);
@@ -221,6 +231,14 @@ ExAllocatePool2(
         HeapFlags |= POOL_ALLOC_ZERO;
     if (Flags & POOL_FLAG_CACHE_ALIGNED)
         HeapFlags |= POOL_ALLOC_CACHE_ALIGNED;
+
+    if (Flags & POOL_FLAG_SESSION)
+    {
+        Block = ExpSessionPoolAllocate(HeapIndex, NumberOfBytes, Tag, HeapFlags);
+        if (Block == NULL && (Flags & POOL_FLAG_RAISE_ON_FAILURE))
+            ExRaiseStatus(STATUS_INSUFFICIENT_RESOURCES);
+        return Block;
+    }
 
     if ((ExpPoolFlags & EX_POOL_FLAG_SPECIAL_POOL) && MmUseSpecialPool(NumberOfBytes, Tag))
     {

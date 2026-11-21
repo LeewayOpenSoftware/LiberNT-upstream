@@ -167,6 +167,15 @@ ExpPoolGrow(
     return Growth;
 }
 
+NTSTATUS
+ExpPoolCreateHeap(
+    _Out_ PPOOL_HEAP *Heap,
+    _In_ PPOOL_VA_REGION Region,
+    _In_ ULONG HeapId)
+{
+    return PoolHeapCreate(Heap, Region, HeapId, EX_POOL_BOOT_SLOTS, ExpPoolEncodeKey(), ExpPoolHeapOptions());
+}
+
 CODE_SEG("INIT")
 VOID
 NTAPI

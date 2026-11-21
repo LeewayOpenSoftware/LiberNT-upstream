@@ -35,6 +35,13 @@ ExFreePoolWithTag(
         return;
     }
 
+    if (MmIsSessionAddress(P))
+    {
+        if (!ExpSessionPoolFree(P))
+            KeBugCheckEx(BAD_POOL_CALLER, 0x46, (ULONG_PTR)P, 0, 0);
+        return;
+    }
+
     Heap = ExpPoolHeapFromAddress(P, &HeapIndex);
     if (Heap == NULL)
         KeBugCheckEx(BAD_POOL_CALLER, 0x46, (ULONG_PTR)P, 0, 0);

@@ -29,8 +29,15 @@ typedef struct _MI_SESSION
     BOOLEAN Ending;
     BOOLEAN HasSpace;
     MI_ADDRESS_SPACE Space;
+    PVOID Pool;
+    PMI_VAD PoolVad[2];
+    ULONG64 PoolBase[2];
+    ULONG64 PoolPages[2];
 } MI_SESSION, *PMI_SESSION;
 
+NTSTATUS ExpSessionPoolCreate(_In_ PVOID Space, _In_ ULONG SessionId, _In_ ULONG64 PagedBase, _In_ SIZE_T PagedBytes,
+                              _In_ ULONG64 NonPagedBase, _In_ SIZE_T NonPagedBytes, _Out_ PVOID *SessionPool);
+VOID ExpSessionPoolDestroy(_In_ PVOID SessionPool);
 
 typedef struct _MI_SESSION_DRIVER
 {
@@ -81,6 +88,70 @@ MiSessionOfProcess(
 
 static
 VOID
+MiSessionPoolRelease(
+    _Inout_ PMI_SESSION Session)
+{
+    ULONG i;
+
+    if (Session->Pool != NULL)
+    {
+        ExpSessionPoolDestroy(Session->Pool);
+        Session->Pool = NULL;
+    }
+    for (i = 0; i < 2; i++)
+    {
+        if (Session->PoolVad[i] == NULL)
+            continue;
+        MiSpaceReleasePinned(&MiSystem, &Session->Space, Session->PoolBase[i], Session->PoolPages[i]);
+        MiSpaceRegionDelete(&MiSystem, &Session->Space, Session->PoolVad[i], TRUE);
+        Session->PoolVad[i] = NULL;
+    }
+}
+
+static
+NTSTATUS
+MiSessionPoolCreate(
+    _Inout_ PMI_SESSION Session)
+{
+    ULONG64 Size = MiSystem.SessionEnd - MiSystem.SessionStart + 1;
+    ULONG64 Bytes[2], Base;
+    NTSTATUS Status = STATUS_SUCCESS;
+    ULONG i;
+
+    ASSERT(Session->HasSpace && Session->Pool == NULL);
+    Bytes[0] = Size / 4 < (128ULL << 20) ? Size / 4 : (128ULL << 20);
+    Bytes[1] = Size / 8 < (64ULL << 20) ? Size / 8 : (64ULL << 20);
+    Base = MiSystem.SessionStart + Size / 4;
+    for (i = 0; i < 2 && NT_SUCCESS(Status); i++)
+    {
+        Status = MiSpaceRegionCreate(&MiSystem, &Session->Space, Bytes[i] >> PAGE_SHIFT, TRUE, Base,
+                                     &Session->PoolVad[i], &Session->PoolBase[i]);
+        if (NT_SUCCESS(Status))
+        {
+            Session->PoolPages[i] = Session->PoolVad[i]->Node.EndingVpn - Session->PoolVad[i]->Node.StartingVpn + 1;
+            Base = Session->PoolBase[i] + (Session->PoolPages[i] << PAGE_SHIFT);
+        }
+    }
+    if (NT_SUCCESS(Status))
+        Status = ExpSessionPoolCreate(&Session->Space, Session->SessionId,
+                                      Session->PoolBase[0], (SIZE_T)(Session->PoolPages[0] << PAGE_SHIFT),
+                                      Session->PoolBase[1], (SIZE_T)(Session->PoolPages[1] << PAGE_SHIFT),
+                                      &Session->Pool);
+    if (!NT_SUCCESS(Status))
+        MiSessionPoolRelease(Session);
+    return Status;
+}
+
+PVOID
+MiSessionPoolOfCurrentProcess(VOID)
+{
+    PMI_SESSION Session = MiSessionOfProcess(PsGetCurrentProcess());
+
+    return Session != NULL ? Session->Pool : NULL;
+}
+
+static
+VOID
 MiSessionFree(
     _Inout_ PMI_SESSION Session)
 {
@@ -91,6 +162,7 @@ MiSessionFree(
     ASSERT(!Session->HasSpace || (Session->Space.IsSession && Session->Space.RootFrame != 0));
     ASSERT(IsListEmpty(&Session->Drivers) && Session->LiveProcessCount == 0);
 
+    MiSessionPoolRelease(Session);
 
     while (!IsListEmpty(&Session->Images))
     {
@@ -456,7 +528,28 @@ MmSessionCreate(
     KeReleaseGuardedMutex(&MiSessionLock);
 
     if (!NT_SUCCESS(Status))
+    {
         MiSessionFree(Session);
+        return Status;
+    }
+
+    if (Session->HasSpace)
+    {
+        Status = MiSessionPoolCreate(Session);
+        if (!NT_SUCCESS(Status))
+        {
+            BOOLEAN Free;
+
+            MiSessionLockAcquire();
+            Free = MiSessionLeaveLocked(Process);
+            MI_PROCESS_OF(Process)->SessionLeader = FALSE;
+            InterlockedExchange(&MiSessionLeaderExists, 0);
+            KeReleaseGuardedMutex(&MiSessionLock);
+            ASSERT(Free);
+            if (Free)
+                MiSessionFree(Session);
+        }
+    }
     return Status;
 }
 

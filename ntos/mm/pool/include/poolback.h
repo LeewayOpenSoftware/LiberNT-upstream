@@ -22,3 +22,11 @@ typedef struct _POOL_KM_LAYOUT
 VOID PoolBackQueryLayout(_Out_ PPOOL_KM_LAYOUT Layout);
 VOID PoolBackDemandBacking(_Out_ PPOOL_BACKING Backing, _In_ BOOLEAN Executable);
 VOID PoolBackResidentBacking(_Out_ PPOOL_BACKING Backing);
+
+typedef struct _POOL_SESSION_BACKING
+{
+    PVOID Space;
+    ULONG Protection;
+} POOL_SESSION_BACKING, *PPOOL_SESSION_BACKING;
+
+VOID PoolBackSessionBacking(_Out_ PPOOL_BACKING Backing, _In_ PPOOL_SESSION_BACKING Context);

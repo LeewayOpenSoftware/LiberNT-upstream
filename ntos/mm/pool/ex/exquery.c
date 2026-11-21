@@ -28,6 +28,9 @@ ExQueryPoolBlockSize(
 
     *QuotaCharged = FALSE;
 
+    if (MmIsSessionAddress(PoolBlock))
+        return ExpSessionPoolQuery(PoolBlock, &Info) ? Info.Size : PAGE_SIZE;
+
     Heap = ExpPoolHeapFromAddress(PoolBlock, &HeapIndex);
     if (Heap == NULL || !PoolHeapQuery(Heap, PoolBlock, &Info))
         return PAGE_SIZE;
@@ -54,9 +57,17 @@ ExpCheckPoolAllocation(
 
     UNREFERENCED_PARAMETER(PoolType);
 
-    Heap = ExpPoolHeapFromAddress(P, &HeapIndex);
-    if (Heap == NULL || !PoolHeapQuery(Heap, P, &Info))
-        return;
+    if (MmIsSessionAddress(P))
+    {
+        if (!ExpSessionPoolQuery(P, &Info))
+            return;
+    }
+    else
+    {
+        Heap = ExpPoolHeapFromAddress(P, &HeapIndex);
+        if (Heap == NULL || !PoolHeapQuery(Heap, P, &Info))
+            return;
+    }
 
     if ((Info.Tag & ~PROTECTED_POOL) != (Tag & ~PROTECTED_POOL))
         KeBugCheckEx(BAD_POOL_CALLER, 0x0A, (ULONG_PTR)P, Info.Tag, Tag);

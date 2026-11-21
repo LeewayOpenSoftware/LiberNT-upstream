@@ -10,14 +10,15 @@
 #include <mm/include/misys.h>
 
 NTSTATUS
-MiSystemRegionCreate(
+MiSpaceRegionCreate(
     _Inout_ PMI_SYSTEM System,
+    _Inout_ PMI_ADDRESS_SPACE Space,
     _In_ ULONG64 PageCount,
     _In_ BOOLEAN PinTables,
+    _In_ ULONG64 FixedBase,
     _Out_ PMI_VAD *VadOut,
     _Out_ PULONG64 Base)
 {
-    PMI_ADDRESS_SPACE Space = &System->SystemSpace;
     ULONG64 TableSpanPages = 1ULL << (System->Arch->Level[1].Shift - PAGE_SHIFT);
     NTSTATUS Status = STATUS_SUCCESS;
     ULONG64 Vpn;
@@ -37,9 +38,28 @@ MiSystemRegionCreate(
     Vad->Type = MiVadSystem;
     Vad->Protection = MI_PROT_READWRITE;
 
+    MI_ASSERT(Space->IsSystem);
+    MI_ASSERT((FixedBase & ((TableSpanPages << PAGE_SHIFT) - 1)) == 0);
     MI_RW_ACQUIRE_EXCLUSIVE(&Space->Lock);
 
-    if (!MiVadFindEmptyRange(&Space->VadRoot, PageCount, TableSpanPages, &Vpn))
+    if (FixedBase != 0)
+    {
+        Vpn = FixedBase >> PAGE_SHIFT;
+        if (FixedBase < Space->LowestVa || FixedBase + (PageCount << PAGE_SHIFT) - 1 > Space->HighestVa ||
+            MiVadFindOverlap(&Space->VadRoot, Vpn, Vpn + PageCount - 1) != NULL)
+        {
+            Status = STATUS_CONFLICTING_ADDRESSES;
+        }
+        else
+        {
+            Vad->Node.StartingVpn = Vpn;
+            Vad->Node.EndingVpn = Vpn + PageCount - 1;
+
+            if (!MiVadInsert(&Space->VadRoot, &Vad->Node))
+                Status = STATUS_CONFLICTING_ADDRESSES;
+        }
+    }
+    else if (!MiVadFindEmptyRange(&Space->VadRoot, PageCount, TableSpanPages, &Vpn))
     {
         Status = STATUS_NO_MEMORY;
     }
@@ -82,14 +102,25 @@ MiSystemRegionCreate(
     return STATUS_SUCCESS;
 }
 
-VOID
-MiSystemRegionDelete(
+NTSTATUS
+MiSystemRegionCreate(
     _Inout_ PMI_SYSTEM System,
+    _In_ ULONG64 PageCount,
+    _In_ BOOLEAN PinTables,
+    _Out_ PMI_VAD *VadOut,
+    _Out_ PULONG64 Base)
+{
+    return MiSpaceRegionCreate(System, &System->SystemSpace, PageCount, PinTables, 0, VadOut, Base);
+}
+
+VOID
+MiSpaceRegionDelete(
+    _Inout_ PMI_SYSTEM System,
+    _Inout_ PMI_ADDRESS_SPACE Space,
     _Inout_ PMI_VAD Vad,
     _In_ BOOLEAN PinnedTables)
 {
-    PMI_ADDRESS_SPACE Space = &System->SystemSpace;
-
+    UNREFERENCED_PARAMETER(System);
     MI_RW_ACQUIRE_EXCLUSIVE(&Space->Lock);
 
     MI_ASSERT(Vad->Type == MiVadSystem);
@@ -104,6 +135,15 @@ MiSystemRegionDelete(
     MiVadRemove(&Space->VadRoot, &Vad->Node);
     MI_RW_RELEASE_EXCLUSIVE(&Space->Lock);
     MI_FREE(Vad);
+}
+
+VOID
+MiSystemRegionDelete(
+    _Inout_ PMI_SYSTEM System,
+    _Inout_ PMI_VAD Vad,
+    _In_ BOOLEAN PinnedTables)
+{
+    MiSpaceRegionDelete(System, &System->SystemSpace, Vad, PinnedTables);
 }
 
 NTSTATUS
@@ -182,15 +222,16 @@ MiSystemMapFrames(
 }
 
 static
-VOID
-MiSystemUnmapScope(
+ULONG
+MiSpaceUnmapScope(
     _Inout_ PMI_SYSTEM System,
+    _Inout_ PMI_ADDRESS_SPACE Space,
     _In_ ULONG64 VirtualAddress,
     _In_ ULONG Count,
     _In_ BOOLEAN FreeFrames,
     _In_ BOOLEAN AllProcessors)
 {
-    PMI_ADDRESS_SPACE Space = &System->SystemSpace;
+    ULONG Unmapped = 0;
     ULONG i;
 
     for (i = 0; i < Count; i++)
@@ -207,6 +248,7 @@ MiSystemUnmapScope(
         if (MiArchPteIsValid(Pte))
         {
             MiPtWrite(Space, Va, Slot, TableFrame, 0);
+            Unmapped++;
 
             if (FreeFrames)
                 MiPfnShareDecrement(&System->Pfn, (ULONG)MiArchPteFrame(Pte), TRUE);
@@ -214,6 +256,7 @@ MiSystemUnmapScope(
         else if (Pte != 0 && MiSoftKind(Pte) == MiSoftResident)
         {
             MiPtWrite(Space, Va, Slot, TableFrame, 0);
+            Unmapped++;
 
             if (FreeFrames)
                 MiPfnShareDecrement(&System->Pfn, (ULONG)MiSoftValue(Pte), TRUE);
@@ -222,6 +265,7 @@ MiSystemUnmapScope(
 
     if (Count != 0)
         MiArchTlbInvalidate(VirtualAddress, Count, AllProcessors);
+    return Unmapped;
 }
 
 VOID
@@ -231,7 +275,7 @@ MiSystemUnmap(
     _In_ ULONG Count,
     _In_ BOOLEAN FreeFrames)
 {
-    MiSystemUnmapScope(System, VirtualAddress, Count, FreeFrames, TRUE);
+    MiSpaceUnmapScope(System, &System->SystemSpace, VirtualAddress, Count, FreeFrames, TRUE);
 }
 
 VOID
@@ -240,14 +284,15 @@ MiSystemUnmapLocal(
     _In_ ULONG64 VirtualAddress,
     _In_ ULONG Count)
 {
-    MiSystemUnmapScope(System, VirtualAddress, Count, FALSE, FALSE);
+    MiSpaceUnmapScope(System, &System->SystemSpace, VirtualAddress, Count, FALSE, FALSE);
 }
 
 #if DBG || defined(MM_HOST_TEST)
 static
 VOID
-MiAssertOwnedSystemRange(
+MiAssertOwnedSpaceRange(
     _In_ PMI_SYSTEM System,
+    _In_ PMI_ADDRESS_SPACE Space,
     _In_ ULONG64 VirtualAddress,
     _In_ ULONG Count)
 {
@@ -256,7 +301,7 @@ MiAssertOwnedSystemRange(
     MI_ASSERT((VirtualAddress & (PAGE_SIZE - 1)) == 0);
     for (i = 0; i < Count; i++)
     {
-        PMI_PTE Slot = MiPtLookup(&System->SystemSpace, VirtualAddress + (ULONG64)i * PAGE_SIZE, NULL);
+        PMI_PTE Slot = MiPtLookup(Space, VirtualAddress + (ULONG64)i * PAGE_SIZE, NULL);
         MI_PTE Pte;
         MI_FRAME_NUMBER Frame;
 
@@ -269,8 +314,10 @@ MiAssertOwnedSystemRange(
     }
 }
 #else
-#define MiAssertOwnedSystemRange(System, VirtualAddress, Count) ((VOID)0)
+#define MiAssertOwnedSpaceRange(System, Space, VirtualAddress, Count) ((VOID)0)
 #endif
+#define MiAssertOwnedSystemRange(System, VirtualAddress, Count) \
+    MiAssertOwnedSpaceRange((System), &(System)->SystemSpace, (VirtualAddress), (Count))
 
 static
 ULONG
@@ -464,16 +511,17 @@ MiSystemProtect(
 }
 
 NTSTATUS
-MiSystemCommitPinned(
+MiSpaceCommitPinned(
     _Inout_ PMI_SYSTEM System,
+    _Inout_ PMI_ADDRESS_SPACE Space,
     _In_ ULONG64 VirtualAddress,
     _In_ ULONG Count,
     _In_ ULONG Protection)
 {
-    PMI_ADDRESS_SPACE Space = &System->SystemSpace;
     NTSTATUS Status = STATUS_SUCCESS;
     ULONG i;
 
+    MI_ASSERT(Space->IsSystem);
     if (!MiChargeCommit(Space, Count))
         return STATUS_COMMITMENT_LIMIT;
 
@@ -500,21 +548,66 @@ MiSystemCommitPinned(
         MiPfnInitializePage(&System->Pfn, Frame, MiPtSlotAddress(Slot, TableFrame, Va), TableFrame,
                             MiSoftMake(MiSoftDemandZero, Protection, 0), 0);
         MiPtWrite(Space, Va, Slot, TableFrame,
-                  MiArchPteMakeLeaf(Frame, Protection, MI_LEAF_GLOBAL | MI_LEAF_DIRTY));
+                  MiArchPteMakeLeaf(Frame, Protection, MI_SPACE_LEAF_OWNER(Space) | MI_LEAF_DIRTY));
     }
 
     if (!NT_SUCCESS(Status))
     {
-        MiAssertOwnedSystemRange(System, VirtualAddress, i);
-        MiSystemUnmap(System, VirtualAddress, i, TRUE);
+        MiAssertOwnedSpaceRange(System, Space, VirtualAddress, i);
+        MiSpaceUnmapScope(System, Space, VirtualAddress, i, TRUE, TRUE);
         MiReturnCommit(Space, Count);
         return Status;
     }
 
     MI_ASSERT(i == Count);
-    MiAssertOwnedSystemRange(System, VirtualAddress, Count);
+    MiAssertOwnedSpaceRange(System, Space, VirtualAddress, Count);
     MI_ATOMIC_ADD64(&Space->ResidentPages, Count);
     return STATUS_SUCCESS;
+}
+
+VOID
+MiSpaceDecommitPinned(
+    _Inout_ PMI_SYSTEM System,
+    _Inout_ PMI_ADDRESS_SPACE Space,
+    _In_ ULONG64 VirtualAddress,
+    _In_ ULONG Count)
+{
+    MiAssertOwnedSpaceRange(System, Space, VirtualAddress, Count);
+    MiSpaceUnmapScope(System, Space, VirtualAddress, Count, TRUE, TRUE);
+    MiReturnCommit(Space, Count);
+    MI_ATOMIC_ADD64(&Space->ResidentPages, -(LONG64)Count);
+}
+
+ULONG
+MiSpaceReleasePinned(
+    _Inout_ PMI_SYSTEM System,
+    _Inout_ PMI_ADDRESS_SPACE Space,
+    _In_ ULONG64 VirtualAddress,
+    _In_ ULONG64 Count)
+{
+    ULONG Released = 0;
+
+    while (Count != 0)
+    {
+        ULONG Chunk = Count > 0x10000 ? 0x10000 : (ULONG)Count;
+
+        Released += MiSpaceUnmapScope(System, Space, VirtualAddress, Chunk, TRUE, TRUE);
+        VirtualAddress += (ULONG64)Chunk << PAGE_SHIFT;
+        Count -= Chunk;
+    }
+    MiReturnCommit(Space, Released);
+    MI_ATOMIC_ADD64(&Space->ResidentPages, -(LONG64)Released);
+    return Released;
+}
+
+NTSTATUS
+MiSystemCommitPinned(
+    _Inout_ PMI_SYSTEM System,
+    _In_ ULONG64 VirtualAddress,
+    _In_ ULONG Count,
+    _In_ ULONG Protection)
+{
+    return MiSpaceCommitPinned(System, &System->SystemSpace, VirtualAddress, Count, Protection);
 }
 
 VOID
@@ -523,10 +616,5 @@ MiSystemDecommitPinned(
     _In_ ULONG64 VirtualAddress,
     _In_ ULONG Count)
 {
-    PMI_ADDRESS_SPACE Space = &System->SystemSpace;
-
-    MiAssertOwnedSystemRange(System, VirtualAddress, Count);
-    MiSystemUnmap(System, VirtualAddress, Count, TRUE);
-    MiReturnCommit(Space, Count);
-    MI_ATOMIC_ADD64(&Space->ResidentPages, -(LONG64)Count);
+    MiSpaceDecommitPinned(System, &System->SystemSpace, VirtualAddress, Count);
 }
