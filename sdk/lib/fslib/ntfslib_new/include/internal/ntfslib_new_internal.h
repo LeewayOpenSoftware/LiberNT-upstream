@@ -913,6 +913,10 @@ FileRecordHeaderHasNumber(_In_ const FileRecordHeader* Header)
     return Header->Header.UpdateSequenceOffset >= FIELD_OFFSET(FileRecordHeader, MFTRecordNumber) + sizeof(ULONG);
 }
 
+BOOLEAN
+ValidateSecurityDescriptor(_In_ const UCHAR* Descriptor,
+                           _In_ ULONG DescriptorLength);
+
 typedef class FileRecord
 {
 public:
@@ -1244,7 +1248,9 @@ private:
         _In_ ULONG NameLength,
         _In_ BOOLEAN IsDirectory,
         _In_ ULONG FileAttributes,
-        _Out_ PFileNameEx* CreatedName);
+        _Out_ PFileNameEx* CreatedName,
+        _In_opt_ const UCHAR* SecurityDescriptor = NULL,
+        _In_ ULONG SecurityDescriptorLength = 0);
 
     NTSTATUS
     ReplaceListedExtendedAttributes(
@@ -1870,7 +1876,9 @@ public:
         _In_ ULONG FileAttributes,
         _Out_ PFileRecord* File,
         _In_opt_ PCWSTR ShortName = NULL,
-        _In_ ULONG ShortNameLength = 0);
+        _In_ ULONG ShortNameLength = 0,
+        _In_opt_ const UCHAR* SecurityDescriptor = NULL,
+        _In_ ULONG SecurityDescriptorLength = 0);
 
     NTSTATUS
     CreateFileInDirectory(
@@ -1882,7 +1890,9 @@ public:
         _In_ BOOLEAN NameKnownMissing,
         _Out_ PFileRecord* File,
         _In_opt_ PCWSTR PreferredShortName = NULL,
-        _In_ ULONG PreferredShortNameLength = 0);
+        _In_ ULONG PreferredShortNameLength = 0,
+        _In_opt_ const UCHAR* SecurityDescriptor = NULL,
+        _In_ ULONG SecurityDescriptorLength = 0);
 
     // ./namespace.cpp
     NTSTATUS
