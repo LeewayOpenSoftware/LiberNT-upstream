@@ -4151,6 +4151,10 @@ VOID
 DxgkDisplayNotifyMonitorEvent(
     _In_ PDXGKRNL_ADAPTER Adapter);
 
+VOID
+DxgkDisplayWin32kProcessCleanup(
+    _In_ PEPROCESS Process);
+
 BOOLEAN
 DxgkDisplayAttachWin32kSession(
     _In_ ULONG SessionId,
